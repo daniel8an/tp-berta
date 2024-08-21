@@ -10,7 +10,9 @@ import sys
 sys.path.append(os.getcwd()) # to correctly import bin & lib
 
 from bin import build_default_model
-from lib import DataConfig, MTLoader, Regulator, prepare_tpberta_loaders, magnitude_regloss
+from lib.data_utils import DataConfig, MTLoader, prepare_tpberta_loaders
+from lib.optim import Regulator
+from lib.aux import magnitude_regloss
 
 def main():
     parser = argparse.ArgumentParser()
@@ -62,7 +64,7 @@ def main():
     if args.task != 'joint':
         if args.task == 'binclass':
             # Path to binary classification datasets (for pre-training)
-            from lib import PRETRAIN_BIN_DATA as DATA
+            from lib.env import PRETRAIN_BIN_DATA as DATA
         elif args.task == 'regression':
             # Path to binary regression datasets (for pre-training)
             from lib import PRETRAIN_REG_DATA as DATA
@@ -155,27 +157,27 @@ def main():
 
     # ASSIGN the result path as CHECKPOINT path in ./lib/env.py
     # or copy the result path as follows
-    # if args.task == 'binclass':
-    #     from lib import BIN_CHECKPOINT as CHECKPOINT
-    # elif args.task == 'regression':
-    #     from lib import REG_CHECKPOINT as CHECKPOINT
-    # else:
-    #     from lib import JOINT_CHECKPOINT as CHECKPOINT
+    if args.task == 'binclass':
+        from lib import BIN_CHECKPOINT as CHECKPOINT
+    elif args.task == 'regression':
+        from lib import REG_CHECKPOINT as CHECKPOINT
+    else:
+        from lib import JOINT_CHECKPOINT as CHECKPOINT
 
-    # if os.path.exists(CHECKPOINT):
-    #     print('Old checkpoint exists: ', str(CHECKPOINT))
-    #     shutil.rmtree(CHECKPOINT)
-    #     print('removed')
-    # print('copying the resulting model to the CHECKPOINT path')
-    # try:
-    #     shutil.copytree(args.result_dir, CHECKPOINT)
-    #     print('success!')
-    #     delete_copy = input("Want to delete the pre-training result directory? (y/n)")
-    #     if delete_copy.lower() == 'y':
-    #         shutil.rmtree(args.result_dir)
-    #         print('clear the result result directory, you can find them in: ', str(CHECKPOINT))
-    # except:
-    #     print('copying failed, please manually assign the result directory as CHECKPOINT path in lib/env.py')
+    if os.path.exists(CHECKPOINT):
+        print('Old checkpoint exists: ', str(CHECKPOINT))
+        shutil.rmtree(CHECKPOINT)
+        print('removed')
+    print('copying the resulting model to the CHECKPOINT path')
+    try:
+        shutil.copytree(args.result_dir, CHECKPOINT)
+        print('success!')
+        delete_copy = input("Want to delete the pre-training result directory? (y/n)")
+        if delete_copy.lower() == 'y':
+            shutil.rmtree(args.result_dir)
+            print('clear the result result directory, you can find them in: ', str(CHECKPOINT))
+    except:
+        print('copying failed, please manually assign the result directory as CHECKPOINT path in lib/env.py')
 
 
 
