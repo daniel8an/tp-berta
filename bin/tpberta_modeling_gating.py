@@ -23,7 +23,11 @@ class TPBertaWithGates(nn.Module):
         super(TPBertaWithGates, self).__init__()
         self.tpberta = original_tpberta
         self.apply_gates_to = apply_gates_to
-        self.input_dim = self.tpberta.config.vocab_size if apply_gates_to == "input" else original_tpberta.config.hidden_size
+        self.input_dim = (
+            self.tpberta.config.vocab_size
+            if apply_gates_to == "input"
+            else original_tpberta.config.hidden_size
+        )
         self.gating_network = GatingNetwork(self.input_dim, gate_hidden_dim)
 
     def forward(
@@ -39,34 +43,36 @@ class TPBertaWithGates(nn.Module):
         tail_prompt: Optional[torch.Tensor] = None,
     ):
 
-        if self.apply_gates_to == 'input':
-            one_hot_input = F.one_hot(input_ids, num_classes=self.tpberta.config.vocab_size).float()
+        if self.apply_gates_to == "input":
+            one_hot_input = F.one_hot(
+                input_ids, num_classes=self.tpberta.config.vocab_size
+            ).float()
             gates = self.gating_network(one_hot_input)
             gated_input_ids = (one_hot_input * gates).argmax(dim=-1)
 
             output = self.tpberta(
-                        gated_input_ids,
-                        input_scales=input_scales,
-                        feature_cls_mask=feature_cls_mask,
-                        token_type_ids=token_type_ids,
-                        position_ids=position_ids,
-                        output_attentions=output_attentions,
-                        output_hidden_states=output_hidden_states,
-                        return_dict=return_dict,
+                gated_input_ids,
+                input_scales=input_scales,
+                feature_cls_mask=feature_cls_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
             )
 
-        elif self.apply_gates_to == 'hidden':
+        elif self.apply_gates_to == "hidden":
             output = self.tpberta(
-                    input_ids,
-                    input_scales=input_scales,
-                    feature_cls_mask=feature_cls_mask,
-                    token_type_ids=token_type_ids,
-                    position_ids=position_ids,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                    tail_prompt=tail_prompt,
-                )
+                input_ids,
+                input_scales=input_scales,
+                feature_cls_mask=feature_cls_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                tail_prompt=tail_prompt,
+            )
             hidden_states = output.last_hidden_state
             gates = self.gating_network(hidden_states)
             gated_hidden_states = hidden_states * gates
