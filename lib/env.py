@@ -4,20 +4,21 @@ import shutil
 import typing as ty
 from pathlib import Path
 
-PROJ = Path('./data').absolute().resolve()
-CHECKPOINT = Path('./checkpoints').absolute().resolve()
+PROJ = Path("./data").absolute().resolve()
+CHECKPOINT = Path("./checkpoints").absolute().resolve()
 
-DATA = PROJ / 'none' # dummy path
-PRETRAIN_BIN_DATA = PROJ / 'pretrain-bin'
-PRETRAIN_REG_DATA = PROJ / 'pretrain-reg'
+DATA = PROJ / "none"  # dummy path
+PRETRAIN_BIN_DATA = PROJ / "pretrain-bin"
+PRETRAIN_REG_DATA = PROJ / "pretrain-reg"
 
-BIN_CHECKPOINT = CHECKPOINT / 'tp-bin'
-REG_CHECKPOINT = CHECKPOINT / 'tp-reg'
-JOINT_CHECKPOINT = CHECKPOINT / 'tp-joint'
+BIN_CHECKPOINT = CHECKPOINT / "tp-bin"
+REG_CHECKPOINT = CHECKPOINT / "tp-reg"
+JOINT_CHECKPOINT = CHECKPOINT / "tp-joint"
 
-FINETUNE_BIN_DATA = PROJ / 'finetune-bin'
-FINETUNE_REG_DATA = PROJ / 'finetune-reg'
-FINETUNE_MUL_DATA = PROJ / 'finetune-mul'
+FINETUNE_BIN_DATA = PROJ / "finetune-bin"
+FINETUNE_REG_DATA = PROJ / "finetune-reg"
+FINETUNE_MUL_DATA = PROJ / "finetune-mul"
+
 
 def get_path(path: ty.Union[str, Path]) -> Path:
     if isinstance(path, str):
@@ -43,8 +44,8 @@ def duplicate_path(
     if dst.exists():
         if exist_ok:
             dst = dst.with_name(
-                dst.name + '_' + datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
+                dst.name + "_" + datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
             )
         else:
-            raise RuntimeError(f'{dst} already exists')
+            raise RuntimeError(f"{dst} already exists")
     (shutil.copytree if src.is_dir() else shutil.copyfile)(src, dst)

@@ -43,10 +43,10 @@ class DCNv2(nn.Module):
             assert d_embedding is not None
             d_in += len(categories) * d_embedding
             category_offsets = torch.tensor([0] + categories[:-1]).cumsum(0)
-            self.register_buffer('category_offsets', category_offsets)
+            self.register_buffer("category_offsets", category_offsets)
             self.category_embeddings = nn.Embedding(sum(categories), d_embedding)
             nn.init.kaiming_uniform_(self.category_embeddings.weight, a=math.sqrt(5))
-            print(f'{self.category_embeddings.weight.shape}')
+            print(f"{self.category_embeddings.weight.shape}")
 
         self.first_linear = nn.Linear(d_in, d)
         self.last_linear = nn.Linear(d if stacked else 2 * d, d_out)
@@ -88,4 +88,3 @@ class DCNv2(nn.Module):
             return self.last_linear(
                 torch.cat([x_cross, self.deep_layers(x)], dim=1)
             ).squeeze(1)
-

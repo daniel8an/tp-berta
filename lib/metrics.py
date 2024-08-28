@@ -10,8 +10,8 @@ from .util import TaskType
 
 
 class PredictionType(enum.Enum):
-    LOGITS = 'logits'
-    PROBS = 'probs'
+    LOGITS = "logits"
+    PROBS = "probs"
 
 
 def calculate_rmse(
@@ -40,11 +40,11 @@ def _get_labels_and_probs(
     elif prediction_type == PredictionType.PROBS:
         probs = y_pred
     else:
-        util.raise_unknown('prediction_type', prediction_type)
+        util.raise_unknown("prediction_type", prediction_type)
 
     assert probs is not None
     labels = np.round(probs) if task_type == TaskType.BINCLASS else probs.argmax(axis=1)
-    return labels.astype('int64'), probs
+    return labels.astype("int64"), probs
 
 
 def calculate_metrics(
@@ -61,14 +61,14 @@ def calculate_metrics(
 
     if task_type == TaskType.REGRESSION:
         assert prediction_type is None
-        assert 'std' in y_info
-        rmse = calculate_rmse(y_true, y_pred, y_info['std'])
-        result = {'rmse': rmse}
+        assert "std" in y_info
+        rmse = calculate_rmse(y_true, y_pred, y_info["std"])
+        result = {"rmse": rmse}
     else:
         labels, probs = _get_labels_and_probs(y_pred, task_type, prediction_type)
         result = cast(
             Dict[str, Any], skm.classification_report(y_true, labels, output_dict=True)
         )
         if task_type == TaskType.BINCLASS:
-            result['roc_auc'] = skm.roc_auc_score(y_true, probs)
+            result["roc_auc"] = skm.roc_auc_score(y_true, probs)
     return result

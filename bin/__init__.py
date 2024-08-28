@@ -3,3 +3,4 @@ from .autoint import AutoInt
 from .dcn2 import DCNv2
 from .mlp import MLP
 from .saint import SAINT
+from .tpberta_modeling_gating import *

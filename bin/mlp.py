@@ -29,10 +29,10 @@ class MLP(nn.Module):
         if categories is not None:
             d_in += len(categories) * d_embedding
             category_offsets = torch.tensor([0] + categories[:-1]).cumsum(0)
-            self.register_buffer('category_offsets', category_offsets)
+            self.register_buffer("category_offsets", category_offsets)
             self.category_embeddings = nn.Embedding(sum(categories), d_embedding)
             nn.init.kaiming_uniform_(self.category_embeddings.weight, a=math.sqrt(5))
-            print(f'{self.category_embeddings.weight.shape}')
+            print(f"{self.category_embeddings.weight.shape}")
 
         self.layers = nn.ModuleList(
             [
@@ -64,4 +64,3 @@ class MLP(nn.Module):
         x = x.squeeze(-1)
 
         return x
-

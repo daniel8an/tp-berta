@@ -48,10 +48,10 @@ class Tokenizer(nn.Module):
             self.category_embeddings = None
         else:
             category_offsets = torch.tensor([0] + categories[:-1]).cumsum(0)
-            self.register_buffer('category_offsets', category_offsets)
+            self.register_buffer("category_offsets", category_offsets)
             self.category_embeddings = nn.Embedding(sum(categories), d_token)
             nn_init.kaiming_uniform_(self.category_embeddings.weight, a=math.sqrt(5))
-            print(f'{self.category_embeddings.weight.shape}')
+            print(f"{self.category_embeddings.weight.shape}")
 
     @property
     def n_tokens(self) -> int:
@@ -63,10 +63,7 @@ class Tokenizer(nn.Module):
         if x_num is None:
             return self.category_embeddings(x_cat + self.category_offsets[None])  # type: ignore[code]
         x_num = torch.cat(
-            [
-                torch.ones(len(x_num), self.n_latent_tokens, device=x_num.device),
-                x_num,
-            ],
+            [torch.ones(len(x_num), self.n_latent_tokens, device=x_num.device), x_num,],
             dim=1,
         )
         x = self.weight[None] * x_num[:, :, None]  # type: ignore[code]
@@ -84,7 +81,7 @@ class MultiheadAttention(nn.Module):
     ) -> None:
         if n_heads > 1:
             assert d % n_heads == 0
-        assert initialization in ['xavier', 'kaiming']
+        assert initialization in ["xavier", "kaiming"]
 
         super().__init__()
         self.W_q = nn.Linear(d, d)
@@ -95,7 +92,7 @@ class MultiheadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout else None
 
         for m in [self.W_q, self.W_k, self.W_v]:
-            if initialization == 'xavier' and (n_heads > 1 or m is not self.W_v):
+            if initialization == "xavier" and (n_heads > 1 or m is not self.W_v):
                 # gain is needed since W_qkv is represented with 3 separate layers
                 nn_init.xavier_uniform_(m.weight, gain=1 / math.sqrt(2))
             nn_init.zeros_(m.bias)
@@ -168,7 +165,7 @@ class AutoInt(nn.Module):
         d_out: int,
     ) -> None:
         assert not prenormalization
-        assert activation == 'relu'
+        assert activation == "relu"
         assert (kv_compression is None) ^ (kv_compression_sharing is not None)
 
         super().__init__()
@@ -180,13 +177,13 @@ class AutoInt(nn.Module):
             compression = nn.Linear(
                 n_tokens, int(n_tokens * kv_compression), bias=False
             )
-            if initialization == 'xavier':
+            if initialization == "xavier":
                 nn_init.xavier_uniform_(compression.weight)
             return compression
 
         self.shared_kv_compression = (
             make_kv_compression()
-            if kv_compression and kv_compression_sharing == 'layerwise'
+            if kv_compression and kv_compression_sharing == "layerwise"
             else None
         )
 
@@ -197,20 +194,20 @@ class AutoInt(nn.Module):
         for layer_idx in range(n_layers):
             layer = nn.ModuleDict(
                 {
-                    'attention': MultiheadAttention(
+                    "attention": MultiheadAttention(
                         d_token, n_heads, attention_dropout, initialization
                     ),
-                    'linear': nn.Linear(d_token, d_token, bias=False),
+                    "linear": nn.Linear(d_token, d_token, bias=False),
                 }
             )
             if not prenormalization or layer_idx:
-                layer['norm0'] = make_normalization()
+                layer["norm0"] = make_normalization()
             if kv_compression and self.shared_kv_compression is None:
-                layer['key_compression'] = make_kv_compression()
-                if kv_compression_sharing == 'headwise':
-                    layer['value_compression'] = make_kv_compression()
+                layer["key_compression"] = make_kv_compression()
+                if kv_compression_sharing == "headwise":
+                    layer["value_compression"] = make_kv_compression()
                 else:
-                    assert kv_compression_sharing == 'key-value'
+                    assert kv_compression_sharing == "key-value"
             self.layers.append(layer)
 
         self.activation = lib.get_activation_fn(activation)
@@ -223,17 +220,17 @@ class AutoInt(nn.Module):
         return (
             (self.shared_kv_compression, self.shared_kv_compression)
             if self.shared_kv_compression is not None
-            else (layer['key_compression'], layer['value_compression'])
-            if 'key_compression' in layer and 'value_compression' in layer
-            else (layer['key_compression'], layer['key_compression'])
-            if 'key_compression' in layer
+            else (layer["key_compression"], layer["value_compression"])
+            if "key_compression" in layer and "value_compression" in layer
+            else (layer["key_compression"], layer["key_compression"])
+            if "key_compression" in layer
             else (None, None)
         )
 
     def _start_residual(self, x, layer, norm_idx):
         x_residual = x
         if self.prenormalization:
-            norm_key = f'norm{norm_idx}'
+            norm_key = f"norm{norm_idx}"
             if norm_key in layer:
                 x_residual = layer[norm_key](x_residual)
         return x_residual
@@ -243,7 +240,7 @@ class AutoInt(nn.Module):
             x_residual = F.dropout(x_residual, self.residual_dropout, self.training)
         x = x + x_residual
         if not self.prenormalization:
-            x = layer[f'norm{norm_idx}'](x)
+            x = layer[f"norm{norm_idx}"](x)
         return x
 
     def forward(self, x_num: ty.Optional[Tensor], x_cat: ty.Optional[Tensor]) -> Tensor:
@@ -253,12 +250,10 @@ class AutoInt(nn.Module):
             layer = ty.cast(ty.Dict[str, nn.Module], layer)
 
             x_residual = self._start_residual(x, layer, 0)
-            x_residual = layer['attention'](
-                x_residual,
-                x_residual,
-                *self._get_kv_compressions(layer),
+            x_residual = layer["attention"](
+                x_residual, x_residual, *self._get_kv_compressions(layer),
             )
-            x = layer['linear'](x)
+            x = layer["linear"](x)
             x = self._end_residual(x, x_residual, layer, 0)
             x = self.activation(x)
 
@@ -266,4 +261,3 @@ class AutoInt(nn.Module):
         x = self.head(x)
         x = x.squeeze(-1)
         return x
-
