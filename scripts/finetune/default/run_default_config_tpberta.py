@@ -139,9 +139,7 @@ def main():
     model_config, model = build_default_model(
         args, data_config, dataset.n_classes, device, pretrain=True
     )  # use pre-trained weights & configs
-    model = TPBertaWithGates(
-        model, gate_hidden_dim=200, apply_gates_to="hidden"
-    )
+    model = TPBertaWithGates(model, gate_hidden_dim=200, apply_gates_to="hidden")
     model.to(device)
     optimizer = make_tpberta_optimizer(
         model, lr=args.lr, weight_decay=args.weight_decay
