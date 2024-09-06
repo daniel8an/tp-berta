@@ -278,24 +278,6 @@ class Regulator:
             loss = F.cross_entropy(logits, labels.view(-1), reduction="mean")
         return loss
 
-    def print_loss(self, epoch, step=None, detail=False):
-        print(
-            f"[PRINT]@Epoch[{epoch+1}/{self.max_epochs}]-Step[{step}] \
-            | Avg Train Loss: {self.avg_train_losses[-1]} \
-            | Avg Eval Loss: {self.avg_eval_losses[-1]} \
-            | Best Metric {self.metric_policy}: {self.best_metric} \
-            | Best Epoch: {self.best_epoch}, Best Step: {self.best_step} \
-            | Avg Run Time: {self.avg_run_time}"
-        )
-        if detail:
-            for d in self.datasets:
-                print(
-                    f"[PRINT] dataset: {d.name} \
-                    | train loss: {self.train_losses[d.name][-1]} \
-                    | eval loss: {self.eval_losses[d.name][-1]} \
-                    | eval metric: {self.eval_metrics[d.name][-1]}"
-                )
-
     def save_and_upload_results(self, epoch, step=None, for_last=False):
         self.lrs.append(self.cur_lr)
         saved_results = {
@@ -360,6 +342,24 @@ class Regulator:
                 wandb.log(uploaded_results, step=step + 1)
             else:
                 wandb.log(uploaded_results, step=epoch + 1)
+
+    def print_loss(self, epoch, step=None, detail=False):
+        print(
+            f"[PRINT]@Epoch[{epoch+1}/{self.max_epochs}]-Step[{step}] \
+            | Avg Train Loss: {self.avg_train_losses[-1]} \
+            | Avg Eval Loss: {self.avg_eval_losses[-1]} \
+            | Best Metric {self.metric_policy}: {self.best_metric} \
+            | Best Epoch: {self.best_epoch}, Best Step: {self.best_step} \
+            | Avg Run Time: {self.avg_run_time}"
+        )
+        if detail:
+            for d in self.datasets:
+                print(
+                    f"[PRINT] dataset: {d.name} \
+                    | train loss: {self.train_losses[d.name][-1]} \
+                    | eval loss: {self.eval_losses[d.name][-1]} \
+                    | eval metric: {self.eval_metrics[d.name][-1]}"
+                )
 
     def save_model(
         self,

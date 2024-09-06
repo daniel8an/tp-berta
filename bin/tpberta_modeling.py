@@ -3,6 +3,10 @@ from typing import Tuple, Optional, List, Union
 import math
 from pathlib import Path
 
+from torch import get_device
+
+from bin.tpberta_modeling_gating import TPBertaWithGates
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -189,7 +193,7 @@ def append_prompt(x: torch.Tensor, prompt: torch.Tensor):
 
 
 class TPBerta(RobertaPreTrainedModel):
-    def __init__(self, config, add_pooling_layer=True):
+    def __init__(self, config, add_pooling_layer=True, apply_gating="input"):
         super().__init__(config)
         self.config = config
 
@@ -201,6 +205,10 @@ class TPBerta(RobertaPreTrainedModel):
         self.encoder = RobertaEncoder(config)
 
         self.pooler = RobertaPooler(config) if add_pooling_layer else None
+
+        input_dim = self.config.hidden_size  # 50539
+        self.gating_one = TPBertaWithGates(input_dim=input_dim, gate_hidden_dim=200, apply_to="hidden").to('cuda:0')
+        self.gating_two = TPBertaWithGates(input_dim=input_dim, gate_hidden_dim=200, apply_to="hidden").to('cuda:0')
 
         self.post_init()
 
@@ -253,14 +261,19 @@ class TPBerta(RobertaPreTrainedModel):
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
+        gated_input_ids = input_ids  # self.gating(input_ids)
+
         embedding_output = self.embeddings(
-            input_ids=input_ids,
+            input_ids=gated_input_ids,
             input_scales=input_scales,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
         )
+
+        embedding_output = (self.gating_one(embedding_output[0]), self.gating_two(embedding_output[1]))
+
         feature_chunk = self.intra_attention(
-            embedding_output, query_mask=feature_cls_mask, input_ids=input_ids,
+            embedding_output, query_mask=feature_cls_mask, input_ids=gated_input_ids,
         )
         # prompt-based tuning (not used in the paper)
         if tail_prompt is not None:
@@ -553,6 +566,7 @@ def build_default_model(
 
         setattr(config, "max_position_embeddings", args.max_position_embeddings)
         setattr(config, "type_vocab_size", args.type_vocab_size)
+        setattr(config, "vocab_size", len(data_cfg.tokenizer))
 
         # resize postion and type embeddings
         base_model = model.base_model

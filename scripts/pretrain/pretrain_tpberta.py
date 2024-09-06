@@ -10,7 +10,7 @@ import sys
 
 sys.path.append(os.getcwd())  # to correctly import bin & lib
 
-from bin import build_default_model
+from bin import build_default_model, TPBertaWithGates
 from lib.data_utils import DataConfig, MTLoader, prepare_tpberta_loaders
 from lib.optim import Regulator
 from lib.aux import magnitude_regloss
@@ -104,7 +104,7 @@ def main():
             with open(data_dir / "skip_datasets.json", "r") as f:
                 skip_datasets = json.load(f)
             ds = [d for d in ds if not any(sd in d for sd in skip_datasets)]
-        return ds
+        return ds[0:1]
 
     """ Data Preparation """
     if args.task != "joint":
@@ -179,6 +179,10 @@ def main():
     model_config, model = build_default_model(args, data_config, num_classes, device)
     # model_config.save_pretrained(args.result_dir) # for downstream load
 
+    # Wrap the base model with the gating mechanism
+    # model.tpberta = TPBertaWithGates(model.tpberta, gate_hidden_dim=200, apply_gates_to="input")
+    # model.tpberta.to(device)
+
     # optimizer and scheduler
     regulator = Regulator.from_default(
         datasets,
@@ -228,7 +232,7 @@ def main():
             )  # automatically evaluate & save model (default: based on eval loss)
             tot_step += 1
         regulator.epoch_end(epoch, model, val)
-    regulator.trainer_end(args, model)  # copy weights of best & last models
+    regulator.trainer_end(model)  # copy weights of best & last models
 
     # ASSIGN the result path as CHECKPOINT path in ./lib/env.py
     # or copy the result path as follows
