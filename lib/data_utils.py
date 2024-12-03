@@ -57,7 +57,7 @@ class DataConfig:
             "num_cat_token": args.max_categorical_token,
             "max_class_num": 30,
             "max_feature_length": args.max_feature_length,
-            "max_seq_length": args.max_seq_length,
+            "max_seq_length": args.max_sequence_length,
             "train_ratio": 0.8,
             "tokenizer_dir": Path(args.base_model_dir),
             "data_dir": None,  # need to be overwritten in kwargs

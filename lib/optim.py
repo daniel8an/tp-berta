@@ -465,7 +465,7 @@ class Regulator:
                     .to(device)
                 )
             with torch.no_grad():
-                logits, _ = model(dataset_idx=dataset_idx, **batch)
+                logits, _, _, _ = model(dataset_idx=dataset_idx, train_gates=False, **batch)
                 loss = self.compute_loss(
                     logits, labels, d.task_type.value, use_prompt=prompt_based
                 )
@@ -651,7 +651,7 @@ class Regulator:
         if self.use_wandb:
             config = {
                 # model config
-                "base_model": args.bert_name,
+                # "base_model": args.bert_name,
                 "max_numerical_token": args.max_numerical_token,
                 "max_categorical_token": args.max_categorical_token,
                 "max_feature_length": args.max_feature_length,
@@ -672,8 +672,8 @@ class Regulator:
             wandb.init(
                 config=config,
                 project="tpberta",
-                entity="zju",
+                # entity="zju",
                 name=args.run_id,
-                notes=f"pre-train a {args.bert_name} model",
+                notes=f"pre-train a tpberta model",
                 job_type="training",
             )

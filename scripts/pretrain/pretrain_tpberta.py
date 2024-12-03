@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import shutil
 import argparse
 from pathlib import Path
@@ -15,6 +16,7 @@ from lib.data_utils import DataConfig, MTLoader, prepare_tpberta_loaders
 from lib.optim import Regulator
 from lib.aux import magnitude_regloss
 
+import wandb
 
 def main():
     parser = argparse.ArgumentParser()
@@ -36,10 +38,13 @@ def main():
     parser.add_argument("--type_vocab_size", type=int, default=5)  # keep default
 
     # data config
-    parser.add_argument("--max_seq_length", type=int, default=512)
+    parser.add_argument("--max_sequence_length", type=int, default=512)
     parser.add_argument("--max_feature_length", type=int, default=8)
     parser.add_argument("--max_numerical_token", type=int, default=256)
     parser.add_argument("--max_categorical_token", type=int, default=16)
+    parser.add_argument("--gating_loss_weight", type=float, default=0.001, help="Weight for gating loss")
+    parser.add_argument("--gating_start_epoch", type=int, default=7, help="Epoch to start gating warmup")
+    parser.add_argument("--dataset_size", type=int, default=10, help="How many datasets to pretrain on")
     parser.add_argument(
         "--feature_map",
         type=str,
@@ -86,15 +91,52 @@ def main():
     parser.add_argument(
         "--wandb", action="store_true", help="Upload to wandb for inspection or not"
     )
+    parser.add_argument(
+        "--is_gating", action="store_true", help="Use gating mechanism or not"
+    )
+
+    # Add new arguments
+    parser.add_argument("--hidden_size", type=int, default=768, help="Hidden size for the model")
+    parser.add_argument("--apply_gating", type=str, default="input", choices=["input", "embedding", "none"], help="Where to apply gating mechanism")
 
     args = parser.parse_args()
+
+    print(json.dumps(vars(args), indent=4))
+
     # Path to pre-training results
     run_id = (
-        f"TPBerta_{args.task}-BS{args.batch_size}-MaxEpoch{args.max_epochs}"  # Run ID
+        f"TPB_{args.task}-BS-{args.batch_size}-ME-{args.max_epochs}-GLW-{args.gating_loss_weight}"
+        f"-G-{args.is_gating}-DS-{args.dataset_size}-GSE-{args.gating_start_epoch}"
+        f"-HS-{args.hidden_size}-AG-{args.apply_gating}"  # Run ID
     )
+    args.run_id = run_id
     args.result_dir = f"{args.result_dir}/{run_id}"
     if not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir)
+
+    if args.wandb:
+        wandb.init(project="pretrain_tpberta", name=run_id, config=args)
+
+    # Save all configurations to a file, including gating-related variables
+    config_path = Path(args.result_dir) / "config.json"
+    config_dict = vars(args)
+    
+    # Add additional gating-related variables if they're not already included
+    gating_vars = {
+        "is_gating": args.is_gating,
+        "gating_loss_weight": args.gating_loss_weight,
+        "gating_start_epoch": args.gating_start_epoch,
+        "apply_gating": args.apply_gating,
+        "hidden_size": args.hidden_size,
+    }
+    
+    config_dict.update(gating_vars)
+    
+    with open(config_path, "w") as config_file:
+        json.dump(config_dict, config_file, indent=4)
+
+    if args.wandb:
+        wandb.config.update(config_dict)
 
     def fetch_dataset_list(data_dir: Path):
         # read a data directory with all csv files for pre-training
@@ -104,7 +146,10 @@ def main():
             with open(data_dir / "skip_datasets.json", "r") as f:
                 skip_datasets = json.load(f)
             ds = [d for d in ds if not any(sd in d for sd in skip_datasets)]
-        return ds[0:1]
+
+        random.seed(42)
+        return random.sample(ds, args.dataset_size)
+        # return ds
 
     """ Data Preparation """
     if args.task != "joint":
@@ -164,6 +209,7 @@ def main():
         datasets = datasets_bin + datasets_reg
         data_config = data_config_bin  # same as data_config_reg except data path, do not affect the subsequent training
 
+    dataset_steps = {i: 0 for i in range(len(datasets))}
     train, val, task_types = [], [], []
     for i, (data_loader, task_type) in enumerate(dataloaders):
         train.append(data_loader["train"])  # train loaders
@@ -172,7 +218,7 @@ def main():
 
     """ Model Preparation """
     # model
-    device = torch.device("cuda")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_classes = [
         d.n_classes for d in datasets
     ]  # class numbers for task-specific heads
@@ -204,12 +250,15 @@ def main():
             train
         )  # a wrapped multi-task dataloader for multiple train loaders
         regulator.epoch_start(epoch, model)
+
+        is_epoch_train_gates = False if epoch < args.gating_start_epoch else True
+
         for dataset_idx, batch in tqdm(train_loader, desc="training"):
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop("labels")
             # train
             regulator.step_start(epoch, tot_step, model)
-            logits, _ = model(dataset_idx=dataset_idx, **batch)
+            logits, outputs, gating_loss, stochastic_gate = model(dataset_idx=dataset_idx, **batch, is_epoch_train_gates=is_epoch_train_gates)
 
             d = regulator.datasets[dataset_idx]
             bs = labels.shape[0]
@@ -220,7 +269,13 @@ def main():
 
             # Regularization: magnitude-aware triplet loss
             reg_loss = magnitude_regloss(bs, data_config.num_encoder, model)
-            loss = task_loss + args.lamb * reg_loss
+            
+            # Add gating loss to the total loss
+            if args.is_gating and is_epoch_train_gates and gating_loss is not None:
+                loss = task_loss + args.lamb * reg_loss + args.gating_loss_weight * gating_loss
+            else:
+                loss = task_loss + args.lamb * reg_loss
+            
             loss.backward()
 
             # update loss
@@ -231,6 +286,17 @@ def main():
                 epoch, tot_step, model, val
             )  # automatically evaluate & save model (default: based on eval loss)
             tot_step += 1
+
+            if args.wandb:
+                wandb.log({
+                    "epoch": epoch,
+                    "tot_step": tot_step,
+                    "task_loss": task_loss.cpu().item(),
+                    "reg_loss": reg_loss.cpu().item(),
+                    "gating_loss": gating_loss.cpu().item() if gating_loss is not None else 0,
+                    "total_loss": loss.cpu().item(),
+                })
+
         regulator.epoch_end(epoch, model, val)
     regulator.trainer_end(model)  # copy weights of best & last models
 
@@ -263,6 +329,15 @@ def main():
             "copying failed, please manually assign the result directory as CHECKPOINT path in lib/env.py"
         )
 
+    # Similar monitoring in pre-training
+    if args.wandb and args.is_gating:
+        gate_stats = model.tpberta.gating.get_gate_statistics()
+        wandb.log({
+            "pretrain/mean_gate": gate_stats['mean_gate'],
+            "pretrain/gate_std": gate_stats['gate_std'],
+            "pretrain/active_gates": gate_stats['active_gates'],
+            # ... other metrics ...
+        })
 
 if __name__ == "__main__":
     main()

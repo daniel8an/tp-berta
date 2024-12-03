@@ -1,11 +1,12 @@
 """ version: cascade + value vector without position encoding """
+import os
 from typing import Tuple, Optional, List, Union
 import math
 from pathlib import Path
 
 from torch import get_device
 
-from bin.tpberta_modeling_gating import TPBertaWithGates
+from bin.tpberta_modeling_gating import TPBertaWithGates, TPBertaOutputWithGating
 
 import torch
 import torch.nn as nn
@@ -73,7 +74,7 @@ class TPBertaEmbeddings(RobertaEmbeddings):
     """
 
     def forward(
-        self, input_ids=None, input_scales=None, token_type_ids=None, position_ids=None
+        self, input_ids=None, input_scales=None, token_type_ids=None, position_ids=None,
     ):
         input_shape = input_ids.size()
 
@@ -146,7 +147,7 @@ class IntraFeatureAttention(nn.Module):
         attention_mask = (feature_ids >= attn_left.view(-1, 1)) & (
             feature_ids < attn_right.view(-1, 1)
         )  # f, b*l
-        attention_mask = attention_mask & (input_ids.view(1, -1) != pad_token_id)
+        attention_mask = attention_mask & (input_ids.reshape(1, -1) != pad_token_id)
 
         x_qk = x_qk.reshape(-1, d)  # b*l, d
         x_v = x_v.reshape(-1, d)  # b*l, d
@@ -193,7 +194,7 @@ def append_prompt(x: torch.Tensor, prompt: torch.Tensor):
 
 
 class TPBerta(RobertaPreTrainedModel):
-    def __init__(self, config, add_pooling_layer=True, apply_gating="input"):
+    def __init__(self, config, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
 
@@ -205,10 +206,16 @@ class TPBerta(RobertaPreTrainedModel):
         self.encoder = RobertaEncoder(config)
 
         self.pooler = RobertaPooler(config) if add_pooling_layer else None
+        self.is_gating = config.is_gating
+        self.apply_gating = config.apply_gating
 
-        input_dim = self.config.hidden_size  # 50539
-        self.gating_one = TPBertaWithGates(input_dim=input_dim, gate_hidden_dim=200, apply_to="hidden").to('cuda:0')
-        self.gating_two = TPBertaWithGates(input_dim=input_dim, gate_hidden_dim=200, apply_to="hidden").to('cuda:0')
+        if self.is_gating:
+            print(f"Using gating mechanism on {self.apply_gating}.")
+        self.gating = TPBertaWithGates(
+            max_sequence_length=config.max_sequence_length,
+            gate_hidden_dim=config.hidden_size,
+            pad_token_id=self.config.pad_token_id
+        ).to(config.device)
 
         self.post_init()
 
@@ -240,6 +247,8 @@ class TPBerta(RobertaPreTrainedModel):
         tail_prompt: Optional[
             torch.Tensor
         ] = None,  # for prompt-based tuning (not used in the paper)
+        train_gates: Optional[bool] = True,
+        is_epoch_train_gates: Optional[bool] = True,
     ):
         output_attentions = (
             output_attentions
@@ -261,7 +270,11 @@ class TPBerta(RobertaPreTrainedModel):
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        gated_input_ids = input_ids  # self.gating(input_ids)
+        if self.is_gating and is_epoch_train_gates:
+            gated_input_ids, reg_loss, stochastic_gate = self.gating(input_ids, train_gates)
+        else:
+            reg_loss, stochastic_gate = None, None
+            gated_input_ids = input_ids
 
         embedding_output = self.embeddings(
             input_ids=gated_input_ids,
@@ -269,8 +282,6 @@ class TPBerta(RobertaPreTrainedModel):
             token_type_ids=token_type_ids,
             position_ids=position_ids,
         )
-
-        embedding_output = (self.gating_one(embedding_output[0]), self.gating_two(embedding_output[1]))
 
         feature_chunk = self.intra_attention(
             embedding_output, query_mask=feature_cls_mask, input_ids=gated_input_ids,
@@ -318,15 +329,17 @@ class TPBerta(RobertaPreTrainedModel):
         )
 
         if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
+            return (sequence_output, pooled_output) + encoder_outputs[1:] + (reg_loss, stochastic_gate)
 
-        return BaseModelOutputWithPoolingAndCrossAttentions(
+        return TPBertaOutputWithGating(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             past_key_values=encoder_outputs.past_key_values,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
             cross_attentions=encoder_outputs.cross_attentions,
+            gating_loss=reg_loss,
+            stochastic_gate=stochastic_gate
         )
 
 
@@ -424,6 +437,8 @@ class TPBertaForMTLPretrain(RobertaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         tail_prompt: Optional[torch.Tensor] = None,
+        train_gates: bool = True,
+        is_epoch_train_gates: bool = False,
     ):
 
         return_dict = (
@@ -439,8 +454,12 @@ class TPBertaForMTLPretrain(RobertaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             tail_prompt=tail_prompt,
+            train_gates=train_gates,
+            is_epoch_train_gates=is_epoch_train_gates,
         )
         sequence_output = outputs[0]
+        gating_loss = outputs.gating_loss if hasattr(outputs, 'gating_loss') else None
+        stochastic_gate = outputs.stochastic_gate if hasattr(outputs, 'stochastic_gate') else None
 
         if tail_prompt is None:  # ordinary finetune
             logits = self.heads[dataset_idx](sequence_output)
@@ -465,6 +484,7 @@ class TPBertaForMTLPretrain(RobertaPreTrainedModel):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                train_gates=train_gates,
             )[0]
             masked_logits = self.mlm_head(masked_output)  # b, f, v
             numerical_logits = masked_logits[
@@ -476,10 +496,12 @@ class TPBertaForMTLPretrain(RobertaPreTrainedModel):
             mlm_loss = nn.functional.cross_entropy(
                 masked_numerical_logits, masked_tokens, reduction="none"
             )
-            return logits.squeeze(1), (outputs, mlm_loss)
+            return logits.squeeze(1), (outputs, mlm_loss, gating_loss, stochastic_gate)
         return (
             logits.squeeze(1),
             outputs,
+            gating_loss,
+            stochastic_gate,
         )  # don't use unsqueeze() for parallel training ! if [2, 3] -> [1, 3] x 2 -> [3] x 2 -> [6]
 
 
@@ -524,6 +546,8 @@ class TPBertaForClassification(RobertaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        train_gates: Optional[bool] = True,
+        is_epoch_train_gates: Optional[bool] = True,
     ):
         return_dict = (
             return_dict if return_dict is not None else self.config.use_return_dict
@@ -537,11 +561,15 @@ class TPBertaForClassification(RobertaPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            train_gates=train_gates,
+            is_epoch_train_gates=is_epoch_train_gates,
         )
         sequence_output = outputs[0]
         logits = self.classifier(sequence_output)
+        gating_loss = outputs.gating_loss if hasattr(outputs, 'gating_loss') else None
+        stochastic_gate = outputs.stochastic_gate if hasattr(outputs, 'stochastic_gate') else None
 
-        return logits.squeeze(1), outputs
+        return logits.squeeze(1), outputs, gating_loss, stochastic_gate
 
 
 def build_default_model(
@@ -554,6 +582,14 @@ def build_default_model(
 ):
     if pretrain and isinstance(num_classes, list):  # MTL pre-training
         config = RobertaConfig.from_pretrained(Path(args.base_model_dir))
+
+        # Update config with new arguments
+        setattr(config, "max_sequence_length", args.max_sequence_length)
+        setattr(config, "hidden_size", args.hidden_size)
+        setattr(config, "apply_gating", args.apply_gating)
+        setattr(config, "is_gating", args.is_gating)
+        setattr(config, "device", str(device))
+
         model = TPBertaForMTLPretrain.from_pretrained(
             Path(args.base_model_dir),
             config=config,
@@ -564,11 +600,10 @@ def build_default_model(
         model.resize_token_embeddings(len(data_cfg.tokenizer))
         model.resize_mlm_head()
 
-        setattr(config, "max_position_embeddings", args.max_position_embeddings)
         setattr(config, "type_vocab_size", args.type_vocab_size)
         setattr(config, "vocab_size", len(data_cfg.tokenizer))
 
-        # resize postion and type embeddings
+        # resize position and type embeddings
         base_model = model.base_model
         base_model.embeddings.position_embeddings = base_model._get_resized_embeddings(
             base_model.embeddings.position_embeddings, config.max_position_embeddings
@@ -580,6 +615,14 @@ def build_default_model(
         setattr(model, "config", config)
     else:
         config = RobertaConfig.from_pretrained(args.pretrain_dir)
+
+        # Update config with new arguments
+        setattr(config, "max_sequence_length", args.max_sequence_length)
+        setattr(config, "hidden_size", args.hidden_size)
+        setattr(config, "apply_gating", args.apply_gating)
+        setattr(config, "is_gating", args.is_gating)
+        setattr(config, "device", str(device))
+
         if pretrain:  # use pretrain params
             # choose to load last or best model
             try:
@@ -588,21 +631,66 @@ def build_default_model(
                     config=config,
                     num_class=num_classes,
                 )
-            except RuntimeError:  # mismatch with postion ids (forget process in pre-train)
-                print("try to fix mismatching in from_pretrained")
-                state_file = (
-                    Path(args.pretrain_dir) / args.model_suffix / "pytorch_model.bin"
-                )
-                state_dict = torch.load(state_file, map_location="cpu")
-                state_dict["tpberta.embeddings.position_ids"] = state_dict[
-                    "tpberta.embeddings.position_ids"
-                ][:, : config.max_position_embeddings]
-                torch.save(state_dict, state_file)
-                model = TPBertaForClassification.from_pretrained(
-                    Path(args.pretrain_dir) / args.model_suffix,
-                    config=config,
-                    num_class=num_classes,
-                )
+            except RuntimeError as e:  # mismatch with position ids or gating architecture
+                if "size mismatch" in str(e):
+                    print("Detected gating architecture mismatch, loading with partial weights...")
+                    # Load the state dict
+                    pretrained_path = os.path.join(args.pretrain_dir, args.model_suffix, 'pytorch_model.bin')
+                    print(f"Loading pretrained weights from: {pretrained_path}")
+                    state_dict = torch.load(pretrained_path)
+                    
+                    # Initialize new model
+                    model = TPBertaForClassification(config, num_class=num_classes)
+                    
+                    # Debug: Print model structure
+                    print("\nModel structure:")
+                    for name, param in model.named_parameters():
+                        print(f"{name}: {param.shape}")
+                    
+                    # Filter and load matching weights with detailed logging
+                    model_dict = model.state_dict()
+                    pretrained_dict = {}
+                    skipped_layers = []
+                    
+                    for k, v in state_dict.items():
+                        if k in model_dict:
+                            if v.shape == model_dict[k].shape:
+                                pretrained_dict[k] = v
+                                print(f"Loaded: {k} with shape {v.shape}")
+                            else:
+                                skipped_layers.append(f"{k}: pretrained {v.shape} != model {model_dict[k].shape}")
+                        else:
+                            skipped_layers.append(f"{k}: not found in model")
+                    
+                    # Update model with matching weights
+                    model_dict.update(pretrained_dict)
+                    model.load_state_dict(model_dict, strict=False)
+                    
+                    print(f"\nLoaded {len(pretrained_dict)}/{len(model_dict)} layers from pretrained model")
+                    print("\nSkipped layers:")
+                    for layer in skipped_layers:
+                        print(layer)
+                    
+                    # Verify critical layers are loaded
+                    critical_layers = ['tpberta.embeddings', 'tpberta.encoder']
+                    for layer in critical_layers:
+                        loaded = any(layer in k for k in pretrained_dict.keys())
+                        print(f"\nCritical layer '{layer}' loaded: {loaded}")
+                else:  # mismatch with position ids
+                    print("try to fix mismatching in from_pretrained")
+                    state_file = (
+                        Path(args.pretrain_dir) / args.model_suffix / "pytorch_model.bin"
+                    )
+                    state_dict = torch.load(state_file, map_location="cpu")
+                    state_dict["tpberta.embeddings.position_ids"] = state_dict[
+                        "tpberta.embeddings.position_ids"
+                    ][:, : config.max_position_embeddings]
+                    torch.save(state_dict, state_file)
+                    model = TPBertaForClassification.from_pretrained(
+                        Path(args.pretrain_dir) / args.model_suffix,
+                        config=config,
+                        num_class=num_classes,
+                    )
         else:
             assert initialization in [
                 "random",
@@ -645,3 +733,5 @@ def build_default_model(
             model = nn.DataParallel(model)
 
     return config, model
+
+

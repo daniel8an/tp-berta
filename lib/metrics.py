@@ -67,7 +67,7 @@ def calculate_metrics(
     else:
         labels, probs = _get_labels_and_probs(y_pred, task_type, prediction_type)
         result = cast(
-            Dict[str, Any], skm.classification_report(y_true, labels, output_dict=True)
+            Dict[str, Any], skm.classification_report(y_true, labels, output_dict=True, zero_division=0)
         )
         if task_type == TaskType.BINCLASS:
             result["roc_auc"] = skm.roc_auc_score(y_true, probs)

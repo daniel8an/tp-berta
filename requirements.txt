@@ -18,3 +18,4 @@ rtdl==0.0.13 # FT-Transformer
 # pytorch_tabnet==4.1.0 # TabNet
 # transtab==0.0.5 # TransTab
 # autogluon==1.0.0 # XTab
+numpy
